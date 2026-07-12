@@ -341,7 +341,7 @@ export default function BuildingManager() {
   useEffect(() => {
     async function load() {
       if (!supabaseConfigured || !supabase) {
-        console.error("Supabase غير مضبوط: أضف VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY");
+        console.error("Supabase غير مضبوط: أضف VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY (أو NEXT_PUBLIC_...)");
         setLoaded(true);
         return;
       }
@@ -589,6 +589,7 @@ export default function BuildingManager() {
           <div className="text-right text-xs font-mono bg-slate-800 rounded-xl p-3 space-y-1 text-slate-300">
             <div>VITE_SUPABASE_URL</div>
             <div>VITE_SUPABASE_ANON_KEY</div>
+            <div className="text-slate-500 pt-1">أو NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY</div>
           </div>
           <p className="text-xs text-slate-500 mt-4">
             Project Settings → Environment Variables → Redeploy
