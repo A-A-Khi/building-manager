@@ -59,14 +59,14 @@ function isRoomAvailable(bookings, roomId, checkIn, checkOut, excludeId = null) 
     .some((b) => datesOverlap(checkIn, checkOut, b.checkIn, b.checkOut));
 }
 function roomStatusOn(bookings, roomId, date = TODAY) {
-  const list = bookingsForRoom(bookings, roomId)
-    .filter((b) => b.checkOut > date)
+  const allBookings = bookingsForRoom(bookings, roomId)
     .sort((a, b) => a.checkIn.localeCompare(b.checkIn));
-  const active = list.find((b) => b.checkIn <= date && date < b.checkOut);
-  if (active) return { status: "occupied", booking: active };
-  const upcoming = list.find((b) => b.checkIn > date);
-  if (upcoming) return { status: "reserved", booking: upcoming };
-  return { status: "vacant", booking: null };
+  const futureBookings = futureBookingsForRoom(bookings, roomId, date);
+  const active = futureBookings.find((b) => b.checkIn <= date && date < b.checkOut);
+  if (active) return { status: "occupied", booking: active, allBookings, futureBookings };
+  const upcoming = futureBookings.filter((b) => b.checkIn > date);
+  if (upcoming.length) return { status: "reserved", booking: upcoming[0], allBookings, futureBookings };
+  return { status: "vacant", booking: null, allBookings, futureBookings };
 }
 const ROOM_STATUS_LABEL = { occupied: "مشغولة", reserved: "محجوزة", vacant: "شاغرة" };
 const ROOM_STATUS_STYLE = {
@@ -117,6 +117,42 @@ const MONTHS = lastNMonths(6);
 const THIS_MONTH = MONTHS[MONTHS.length - 1].key;
 
 const CATEGORIES_ALL = ["كهرباء", "مياه", "صيانة", "نظافة", "أمن", "أخرى"];
+
+// 18 غرفة: من 2 إلى 17 و 19 و 20 (بدون غرفة 1 و 18)
+const DEFAULT_ROOM_NUMBERS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19, 20];
+
+function floorForRoomNumber(n) {
+  if (n <= 5) return 1;
+  if (n <= 9) return 2;
+  if (n <= 13) return 3;
+  if (n <= 17) return 4;
+  return 5;
+}
+
+function buildDefaultRooms(existing = []) {
+  const byNumber = new Map(existing.map((r) => [r.number, r]));
+  DEFAULT_ROOM_NUMBERS.forEach((n) => {
+    if (!byNumber.has(n)) {
+      byNumber.set(n, {
+        id: `room-${n}`,
+        number: n,
+        floor: floorForRoomNumber(n),
+        rent: 25,
+        rentType: "daily",
+        status: "vacant",
+      });
+    }
+  });
+  return [...byNumber.values()]
+    .filter((r) => DEFAULT_ROOM_NUMBERS.includes(r.number))
+    .sort((a, b) => a.number - b.number);
+}
+
+function futureBookingsForRoom(bookings, roomId, date = TODAY) {
+  return bookingsForRoom(bookings, roomId)
+    .filter((b) => b.checkOut > date)
+    .sort((a, b) => a.checkIn.localeCompare(b.checkIn));
+}
 
 // ---------- small UI atoms ----------
 function StatCard({ icon: Icon, label, value, sub, tone = "slate", accent }) {
@@ -336,6 +372,8 @@ export default function BuildingManager() {
   const [roomFilter, setRoomFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [confirm, setConfirm] = useState(null);
+  const [selectedRoomDetail, setSelectedRoomDetail] = useState(null);
+  const [prefillRoomId, setPrefillRoomId] = useState(null);
 
   // load saved data once on first render
   useEffect(() => {
@@ -349,7 +387,8 @@ export default function BuildingManager() {
       if (error) console.error("خطأ في تحميل البيانات:", error);
       if (data?.data) {
         const d = data.data;
-        if (d.rooms) setRooms(d.rooms);
+        if (d.rooms) setRooms(buildDefaultRooms(d.rooms));
+        else setRooms(buildDefaultRooms([]));
         if (d.bookings) {
           setBookings(d.bookings);
         } else if (d.residents) {
@@ -371,6 +410,8 @@ export default function BuildingManager() {
           })));
         }
         if (d.expenses) setExpenses(d.expenses);
+      } else {
+        setRooms(buildDefaultRooms([]));
       }
       setLoaded(true);
     }
@@ -535,6 +576,14 @@ export default function BuildingManager() {
     setPayments((prev) => prev.filter((p) => p.id !== id));
   }
 
+  function syncDefaultRooms() {
+    setRooms((prev) => buildDefaultRooms(prev));
+  }
+  function openBookingForRoom(roomId) {
+    setPrefillRoomId(roomId);
+    setTab("bookings");
+    setShowBookingForm(true);
+  }
   function addRoom(data) {
     const id = `room-${data.number}`;
     setRooms((prev) => [...prev, { id, ...data, status: "vacant" }]);
@@ -553,6 +602,7 @@ export default function BuildingManager() {
     const id = `book-${data.roomId}-${Date.now()}`;
     setBookings((prev) => [...prev, { id, ...data }]);
     setShowBookingForm(false);
+    setPrefillRoomId(null);
     return true;
   }
   function removeBooking(book) {
@@ -772,8 +822,13 @@ export default function BuildingManager() {
           <div className="flex flex-col gap-4">
             <PageHeader
               title="الغرف"
-              subtitle={`${occupied.length} مشغولة · ${reserved.length} محجوزة · ${vacant.length} شاغرة`}
-              action={<BtnPrimary onClick={() => setShowRoomForm(true)}><Plus size={15} /> إضافة غرفة</BtnPrimary>}
+              subtitle={`${rooms.length} غرفة · ${occupied.length} مشغولة الآن · ${reserved.length} محجوزة لاحقاً`}
+              action={
+                <div className="flex gap-2 flex-wrap">
+                  <BtnGhost onClick={syncDefaultRooms}>مزامنة 18 غرفة</BtnGhost>
+                  <BtnPrimary onClick={() => setShowRoomForm(true)}><Plus size={15} /> إضافة غرفة</BtnPrimary>
+                </div>
+              }
             />
 
             <FilterChips
@@ -798,14 +853,17 @@ export default function BuildingManager() {
                   <span className="h-px flex-1 bg-slate-800" />
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5">
-                  {filteredRooms.filter((s) => s.room.floor === floor).sort((a, b) => a.room.number - b.room.number).map(({ room: r, status, booking }) => (
+                  {filteredRooms.filter((s) => s.room.floor === floor).sort((a, b) => a.room.number - b.room.number).map(({ room: r, status, booking, allBookings, futureBookings }) => (
                     <RoomCard
                       key={r.id}
                       room={r}
                       status={status}
                       booking={booking}
+                      allBookings={allBookings}
+                      futureBookings={futureBookings}
                       onDelete={() => requestDelete("room", r.id, `غرفة ${r.number}`)}
-                      onBook={() => { setTab("bookings"); setShowBookingForm(true); }}
+                      onBook={() => openBookingForRoom(r.id)}
+                      onView={() => setSelectedRoomDetail(r)}
                     />
                   ))}
                 </div>
@@ -983,8 +1041,17 @@ export default function BuildingManager() {
       <Modal open={showRoomForm} onClose={() => setShowRoomForm(false)} title="إضافة غرفة">
         <RoomForm onAdd={addRoom} />
       </Modal>
-      <Modal open={showBookingForm} onClose={() => setShowBookingForm(false)} title="حجز جديد" wide>
-        <BookingForm rooms={rooms} bookings={bookings} onAdd={addBooking} />
+      <Modal open={showBookingForm} onClose={() => { setShowBookingForm(false); setPrefillRoomId(null); }} title="حجز جديد" wide>
+        <BookingForm rooms={rooms} bookings={bookings} onAdd={addBooking} prefillRoomId={prefillRoomId} />
+      </Modal>
+      <Modal open={!!selectedRoomDetail} onClose={() => setSelectedRoomDetail(null)} title={selectedRoomDetail ? `غرفة ${selectedRoomDetail.number}` : ""} wide>
+        {selectedRoomDetail && (
+          <RoomDetailPanel
+            room={selectedRoomDetail}
+            bookings={bookings}
+            onBook={() => { setSelectedRoomDetail(null); openBookingForRoom(selectedRoomDetail.id); }}
+          />
+        )}
       </Modal>
       <Modal open={showExpForm} onClose={() => setShowExpForm(false)} title="إضافة مصروف">
         <ExpenseForm onAdd={addExpense} />
@@ -994,13 +1061,20 @@ export default function BuildingManager() {
 }
 
 // ---------- room & booking cards ----------
-function RoomCard({ room, status, booking, onDelete, onBook }) {
+function RoomCard({ room, status, booking, allBookings, futureBookings, onDelete, onBook, onView }) {
+  const nowLabel = status === "occupied" ? "مشغولة الآن" : status === "reserved" ? "محجوزة لاحقاً" : "شاغرة الآن";
+
   return (
-    <div className={`group relative rounded-xl border p-3.5 card-hover cursor-default ${ROOM_STATUS_STYLE[status]}`}>
+    <button
+      type="button"
+      onClick={onView}
+      className={`group relative rounded-xl border p-3.5 card-hover cursor-pointer text-right w-full ${ROOM_STATUS_STYLE[status]}`}
+    >
       <div className="flex items-start justify-between mb-2">
         <span className="font-mono text-base font-bold">{room.number}</span>
         <StatusChip status={status} />
       </div>
+      <div className="text-[11px] font-medium text-slate-300 mb-1">{nowLabel}</div>
       <div className="text-xs text-slate-400 truncate mb-1">
         {booking ? booking.name : "—"}
       </div>
@@ -1009,17 +1083,111 @@ function RoomCard({ room, status, booking, onDelete, onBook }) {
           {fmtDateShort(booking.checkIn)} — {fmtDateShort(booking.checkOut)}
         </div>
       )}
+      {allBookings.length > 1 && (
+        <div className="text-[10px] text-amber-400/80 mb-1">+{allBookings.length - 1} حجز آخر</div>
+      )}
       <div className="text-xs font-mono text-amber-400/90">{fmtRate(room)}</div>
       <div className="absolute top-2 left-2 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        {status === "vacant" && (
-          <button onClick={onBook} className="w-6 h-6 rounded-md bg-amber-400/20 text-amber-400 flex items-center justify-center hover:bg-amber-400/30" title="حجز">
-            <Plus size={12} />
-          </button>
-        )}
-        <button onClick={onDelete} className="w-6 h-6 rounded-md bg-slate-800/80 text-slate-500 flex items-center justify-center hover:text-rose-400" title="حذف">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onBook(); }}
+          className="w-6 h-6 rounded-md bg-amber-400/20 text-amber-400 flex items-center justify-center hover:bg-amber-400/30"
+          title="حجز في فترة أخرى"
+        >
+          <Plus size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="w-6 h-6 rounded-md bg-slate-800/80 text-slate-500 flex items-center justify-center hover:text-rose-400"
+          title="حذف"
+        >
           <Trash2 size={12} />
         </button>
       </div>
+    </button>
+  );
+}
+
+function RoomDetailPanel({ room, bookings, onBook }) {
+  const { status, booking, allBookings, futureBookings } = roomStatusOn(bookings, room.id);
+  const past = allBookings.filter((b) => b.checkOut <= TODAY);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-sm text-slate-400">طابق {room.floor} · {fmtRate(room)}</div>
+          <StatusChip status={status} />
+        </div>
+        <BtnPrimary onClick={onBook}><Plus size={15} /> حجز في فترة فارغة</BtnPrimary>
+      </div>
+
+      {status === "occupied" && booking && (
+        <div className="bg-emerald-400/10 border border-emerald-400/20 rounded-xl px-4 py-3 text-sm">
+          <span className="text-emerald-400 font-medium">مشغولة الآن:</span> {booking.name} ({fmtDateShort(booking.checkIn)} — {fmtDateShort(booking.checkOut)})
+        </div>
+      )}
+
+      <div>
+        <h4 className="text-sm font-semibold text-slate-200 mb-2">الحجوزات القادمة والجارية ({futureBookings.length})</h4>
+        {futureBookings.length === 0 ? (
+          <p className="text-sm text-slate-500">لا توجد حجوزات — الغرفة متاحة لأي تاريخ</p>
+        ) : (
+          <div className="space-y-2">
+            {futureBookings.map((b) => (
+              <div key={b.id} className="flex items-center justify-between bg-slate-800/50 rounded-xl px-3 py-2 text-sm">
+                <div>
+                  <div className="font-medium">{b.name}</div>
+                  <div className="text-xs text-slate-500">{fmtDateShort(b.checkIn)} — {fmtDateShort(b.checkOut)} · {bookingNights(b.checkIn, b.checkOut)} ليلة</div>
+                </div>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${bookingPhase(b) === "active" ? "bg-emerald-400/15 text-emerald-400" : "bg-amber-400/15 text-amber-400"}`}>
+                  {bookingPhase(b) === "active" ? "جاري" : "قادم"}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {past.length > 0 && (
+        <div>
+          <h4 className="text-sm font-semibold text-slate-400 mb-2">حجوزات سابقة ({past.length})</h4>
+          <div className="space-y-1">
+            {past.slice(-3).map((b) => (
+              <div key={b.id} className="text-xs text-slate-500">{b.name} · {fmtDateShort(b.checkIn)} — {fmtDateShort(b.checkOut)}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <p className="text-xs text-slate-500 leading-relaxed">
+        يمكن حجز نفس الغرفة في فترات مختلفة طالما التواريخ لا تتقاطع مع الحجوزات أعلاه.
+      </p>
+    </div>
+  );
+}
+
+function RoomSchedule({ bookings, checkIn, checkOut }) {
+  if (!bookings.length) {
+    return <p className="text-xs text-slate-500">لا حجوزات على هذه الغرفة — متاحة بالكامل</p>;
+  }
+  const overlaps = bookings.filter((b) => datesOverlap(checkIn, checkOut, b.checkIn, b.checkOut));
+  return (
+    <div className="space-y-2">
+      {bookings.map((b) => {
+        const conflicts = datesOverlap(checkIn, checkOut, b.checkIn, b.checkOut);
+        return (
+          <div key={b.id} className={`text-xs rounded-lg px-3 py-2 ${conflicts ? "bg-rose-400/10 border border-rose-400/20 text-rose-300" : "bg-slate-800/50 text-slate-400"}`}>
+            {fmtDateShort(b.checkIn)} — {fmtDateShort(b.checkOut)} · {b.name}
+            {conflicts && <span className="mr-2"> · يتعارض مع الفترة المختارة</span>}
+            {!conflicts && bookingPhase(b) === "active" && <span className="mr-2 text-emerald-400"> · جاري</span>}
+          </div>
+        );
+      })}
+      {overlaps.length === 0 && checkIn && checkOut && checkOut > checkIn && (
+        <p className="text-xs text-emerald-400">✓ الفترة المختارة متاحة لهذه الغرفة</p>
+      )}
     </div>
   );
 }
@@ -1189,14 +1357,21 @@ function RoomForm({ onAdd }) {
   const [floor, setFloor] = useState("");
   const [rent, setRent] = useState("");
   const [rentType, setRentType] = useState("daily");
+  const [error, setError] = useState("");
   const submit = () => {
+    const n = Number(number);
     if (!number || !floor || !rent) return;
-    onAdd({ number: Number(number), floor: Number(floor), rent: Number(rent), rentType });
+    if (n === 1 || n === 18) {
+      setError("غرفة 1 و 18 غير موجودة في المبنى");
+      return;
+    }
+    setError("");
+    onAdd({ number: n, floor: Number(floor), rent: Number(rent), rentType });
   };
   return (
     <FormShell onSubmit={submit} submitLabel="إضافة الغرفة">
       <div className="grid sm:grid-cols-2 gap-4">
-        <div><FieldLabel>رقم الغرفة</FieldLabel><input className={inputCls} placeholder="مثال: 101" value={number} onChange={(e) => setNumber(e.target.value)} /></div>
+        <div><FieldLabel>رقم الغرفة</FieldLabel><input className={inputCls} placeholder="2 — 17 أو 19 — 20" value={number} onChange={(e) => setNumber(e.target.value)} /></div>
         <div><FieldLabel>الطابق</FieldLabel><input className={inputCls} placeholder="مثال: 1" value={floor} onChange={(e) => setFloor(e.target.value)} /></div>
         <div><FieldLabel>نوع الإيجار</FieldLabel>
           <select className={inputCls} value={rentType} onChange={(e) => setRentType(e.target.value)}>
@@ -1206,29 +1381,30 @@ function RoomForm({ onAdd }) {
         </div>
         <div><FieldLabel>{rentType === "daily" ? "السعر لليلة (ر.ع)" : "السعر الشهري (ر.ع)"}</FieldLabel><input className={inputCls} placeholder="0" value={rent} onChange={(e) => setRent(e.target.value)} /></div>
       </div>
+      {error && <p className="text-xs text-rose-400">{error}</p>}
     </FormShell>
   );
 }
 
-function BookingForm({ rooms, bookings, onAdd }) {
+function BookingForm({ rooms, bookings, onAdd, prefillRoomId }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [checkIn, setCheckIn] = useState(TODAY);
   const [checkOut, setCheckOut] = useState(addDays(TODAY, 3));
-  const [roomId, setRoomId] = useState(rooms[0]?.id || "");
+  const [roomId, setRoomId] = useState(prefillRoomId || rooms[0]?.id || "");
   const [collectionMode, setCollectionMode] = useState("lumpsum");
   const [error, setError] = useState("");
 
-  const availableRooms = rooms.filter((r) => isRoomAvailable(bookings, r.id, checkIn, checkOut));
+  const sortedRooms = [...rooms].sort((a, b) => a.number - b.number);
   const selectedRoom = rooms.find((r) => r.id === roomId);
+  const roomBookings = bookingsForRoom(bookings, roomId).sort((a, b) => a.checkIn.localeCompare(b.checkIn));
+  const periodAvailable = roomId ? isRoomAvailable(bookings, roomId, checkIn, checkOut) : false;
   const nights = bookingNights(checkIn, checkOut);
   const total = expectedForBooking({ checkIn, checkOut }, selectedRoom);
 
   useEffect(() => {
-    if (roomId && !availableRooms.find((r) => r.id === roomId)) {
-      setRoomId(availableRooms[0]?.id || "");
-    }
-  }, [checkIn, checkOut, availableRooms, roomId]);
+    if (prefillRoomId) setRoomId(prefillRoomId);
+  }, [prefillRoomId]);
 
   const setDuration = (days) => setCheckOut(addDays(checkIn, days));
 
@@ -1238,7 +1414,7 @@ function BookingForm({ rooms, bookings, onAdd }) {
       return;
     }
     if (!isRoomAvailable(bookings, roomId, checkIn, checkOut)) {
-      setError("الغرفة محجوزة في هذه الفترة — اختر غرفة أو تواريخ أخرى");
+      setError("الغرفة محجوزة في هذه الفترة — اختر تواريخ أخرى أو غرفة مختلفة");
       return;
     }
     setError("");
@@ -1263,15 +1439,29 @@ function BookingForm({ rooms, bookings, onAdd }) {
           </div>
         </div>
         <div className="sm:col-span-2">
-          <FieldLabel icon={DoorOpen}>الغرفة المتاحة</FieldLabel>
+          <FieldLabel icon={DoorOpen}>اختر الغرفة</FieldLabel>
           <select className={inputCls} value={roomId} onChange={(e) => setRoomId(e.target.value)}>
-            {availableRooms.length === 0 && <option value="">لا توجد غرف متاحة في هذه الفترة</option>}
-            {availableRooms.map((r) => <option key={r.id} value={r.id}>غرفة {r.number} — طابق {r.floor} — {fmtRate(r)}</option>)}
+            {sortedRooms.map((r) => {
+              const avail = isRoomAvailable(bookings, r.id, checkIn, checkOut);
+              const { status } = roomStatusOn(bookings, r.id);
+              return (
+                <option key={r.id} value={r.id} disabled={!avail}>
+                  غرفة {r.number} — طابق {r.floor} — {ROOM_STATUS_LABEL[status]} — {avail ? "متاحة للفترة" : "محجوزة في الفترة"} — {fmtRate(r)}
+                </option>
+              );
+            })}
           </select>
-          {availableRooms.length > 0 && (
-            <p className="text-[11px] text-slate-500 mt-1.5">{availableRooms.length} غرفة متاحة من أصل {rooms.length}</p>
-          )}
+          <p className="text-[11px] text-slate-500 mt-1.5">
+            {sortedRooms.filter((r) => isRoomAvailable(bookings, r.id, checkIn, checkOut)).length} غرفة متاحة للفترة المختارة
+            {selectedRoom && !periodAvailable && <span className="text-rose-400 mr-1"> · الغرفة المختارة محجوزة في هذه التواريخ</span>}
+          </p>
         </div>
+        {selectedRoom && (
+          <div className="sm:col-span-2">
+            <FieldLabel>جدول حجوزات غرفة {selectedRoom.number}</FieldLabel>
+            <RoomSchedule bookings={roomBookings} checkIn={checkIn} checkOut={checkOut} />
+          </div>
+        )}
         <div className="sm:col-span-2">
           <FieldLabel>نظام التحصيل</FieldLabel>
           <div className="grid grid-cols-2 gap-2">
@@ -1290,7 +1480,7 @@ function BookingForm({ rooms, bookings, onAdd }) {
         </div>
       </div>
 
-      {selectedRoom && (
+      {selectedRoom && periodAvailable && (
         <div className="bg-gradient-to-l from-amber-400/10 to-transparent border border-amber-400/20 rounded-xl px-4 py-3 flex items-center justify-between">
           <div>
             <div className="text-xs text-slate-400">المبلغ الإجمالي</div>
