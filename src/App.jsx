@@ -143,9 +143,7 @@ function buildDefaultRooms(existing = []) {
       });
     }
   });
-  return [...byNumber.values()]
-    .filter((r) => DEFAULT_ROOM_NUMBERS.includes(r.number))
-    .sort((a, b) => a.number - b.number);
+  return [...byNumber.values()].sort((a, b) => a.number - b.number);
 }
 
 function futureBookingsForRoom(bookings, roomId, date = TODAY) {
@@ -387,7 +385,7 @@ export default function BuildingManager() {
       if (error) console.error("خطأ في تحميل البيانات:", error);
       if (data?.data) {
         const d = data.data;
-        if (d.rooms) setRooms(buildDefaultRooms(d.rooms));
+        if (d.rooms?.length) setRooms(d.rooms);
         else setRooms(buildDefaultRooms([]));
         if (d.bookings) {
           setBookings(d.bookings);
@@ -585,8 +583,11 @@ export default function BuildingManager() {
     setShowBookingForm(true);
   }
   function addRoom(data) {
-    const id = `room-${data.number}`;
-    setRooms((prev) => [...prev, { id, ...data, status: "vacant" }]);
+    setRooms((prev) => {
+      if (prev.some((r) => r.number === data.number)) return prev;
+      const id = `room-${data.number}`;
+      return [...prev, { id, ...data, status: "vacant" }].sort((a, b) => a.number - b.number);
+    });
     setShowRoomForm(false);
   }
   function deleteRoom(id) {
@@ -825,7 +826,7 @@ export default function BuildingManager() {
               subtitle={`${rooms.length} غرفة · ${occupied.length} مشغولة الآن · ${reserved.length} محجوزة لاحقاً`}
               action={
                 <div className="flex gap-2 flex-wrap">
-                  <BtnGhost onClick={syncDefaultRooms}>مزامنة 18 غرفة</BtnGhost>
+                  <BtnGhost onClick={syncDefaultRooms}>إضافة الغرف الناقصة (2–17، 19–20)</BtnGhost>
                   <BtnPrimary onClick={() => setShowRoomForm(true)}><Plus size={15} /> إضافة غرفة</BtnPrimary>
                 </div>
               }
@@ -1039,7 +1040,7 @@ export default function BuildingManager() {
       )}
 
       <Modal open={showRoomForm} onClose={() => setShowRoomForm(false)} title="إضافة غرفة">
-        <RoomForm onAdd={addRoom} />
+        <RoomForm onAdd={addRoom} existingRooms={rooms} />
       </Modal>
       <Modal open={showBookingForm} onClose={() => { setShowBookingForm(false); setPrefillRoomId(null); }} title="حجز جديد" wide>
         <BookingForm rooms={rooms} bookings={bookings} onAdd={addBooking} prefillRoomId={prefillRoomId} />
@@ -1352,7 +1353,7 @@ function FormShell({ onSubmit, children, submitLabel = "حفظ" }) {
 
 const inputCls = "bg-slate-800/80 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-right w-full focus:outline-none focus:ring-2 focus:ring-amber-400/50 focus:border-amber-400/50 transition-all placeholder:text-slate-600";
 
-function RoomForm({ onAdd }) {
+function RoomForm({ onAdd, existingRooms }) {
   const [number, setNumber] = useState("");
   const [floor, setFloor] = useState("");
   const [rent, setRent] = useState("");
@@ -1361,8 +1362,8 @@ function RoomForm({ onAdd }) {
   const submit = () => {
     const n = Number(number);
     if (!number || !floor || !rent) return;
-    if (n === 1 || n === 18) {
-      setError("غرفة 1 و 18 غير موجودة في المبنى");
+    if (existingRooms.some((r) => r.number === n)) {
+      setError(`غرفة ${n} موجودة بالفعل`);
       return;
     }
     setError("");
@@ -1371,7 +1372,7 @@ function RoomForm({ onAdd }) {
   return (
     <FormShell onSubmit={submit} submitLabel="إضافة الغرفة">
       <div className="grid sm:grid-cols-2 gap-4">
-        <div><FieldLabel>رقم الغرفة</FieldLabel><input className={inputCls} placeholder="2 — 17 أو 19 — 20" value={number} onChange={(e) => setNumber(e.target.value)} /></div>
+        <div><FieldLabel>رقم الغرفة</FieldLabel><input className={inputCls} placeholder="مثال: 21" value={number} onChange={(e) => setNumber(e.target.value)} /></div>
         <div><FieldLabel>الطابق</FieldLabel><input className={inputCls} placeholder="مثال: 1" value={floor} onChange={(e) => setFloor(e.target.value)} /></div>
         <div><FieldLabel>نوع الإيجار</FieldLabel>
           <select className={inputCls} value={rentType} onChange={(e) => setRentType(e.target.value)}>
