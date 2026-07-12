@@ -18,10 +18,8 @@ const monthKey = (y, m) => `${y}-${String(m).padStart(2, "0")}`;
 const CURRENT = { y: 2026, m: 7 };
 const ARABIC_MONTHS = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"];
 
-function fmtRate(room) {
-  return `${fmt(room.rent)} / ${room.rentType === "daily" ? "يوم" : "شهر"}`;
-}
 const COLLECTION_LABEL = { lumpsum: "دفعة واحدة (وقتي)", installments: "على دفعات خلال المدة" };
+const DEFAULT_DAILY_RATE = 25;
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -39,13 +37,17 @@ function bookingNights(checkIn, checkOut) {
 function datesOverlap(s1, e1, s2, e2) {
   return s1 < e2 && s2 < e1;
 }
-function dailyRate(room) {
-  if (!room) return 0;
-  return room.rentType === "daily" ? room.rent : room.rent / 30;
+function bookingDailyRate(booking, room) {
+  if (booking?.dailyRate != null && booking.dailyRate > 0) return booking.dailyRate;
+  if (room?.rent) return room.rentType === "daily" ? room.rent : room.rent / 30;
+  return DEFAULT_DAILY_RATE;
 }
 function expectedForBooking(booking, room) {
-  if (!booking || !room) return 0;
-  return dailyRate(room) * bookingNights(booking.checkIn, booking.checkOut);
+  if (!booking?.checkIn || !booking?.checkOut) return 0;
+  return bookingDailyRate(booking, room) * bookingNights(booking.checkIn, booking.checkOut);
+}
+function fmtDailyRate(rate) {
+  return `${fmt(rate)} / ليلة`;
 }
 function fmtDateRange(checkIn, checkOut) {
   return `${checkIn} → ${checkOut} (${bookingNights(checkIn, checkOut)} ليلة)`;
@@ -135,19 +137,23 @@ function floorLabel(floor) {
   return `الطابق ${floor}`;
 }
 
-function getFixedRooms(saved = []) {
-  const savedByNumber = new Map(saved.map((r) => [r.number, r]));
-  return FIXED_ROOM_NUMBERS.map((n) => {
-    const s = savedByNumber.get(n);
-    return {
-      id: `room-${n}`,
-      number: n,
-      floor: floorForRoomNumber(n),
-      rent: s?.rent ?? 25,
-      rentType: s?.rentType ?? "daily",
-      status: "vacant",
-    };
+function migrateBookingRates(bookings, savedRooms = []) {
+  const roomById = new Map(savedRooms.map((r) => [r.id, r]));
+  return bookings.map((b) => {
+    if (b.dailyRate != null && b.dailyRate > 0) return b;
+    const room = roomById.get(b.roomId);
+    const rate = room ? (room.rentType === "daily" ? room.rent : (room.rent || DEFAULT_DAILY_RATE) / 30) : DEFAULT_DAILY_RATE;
+    return { ...b, dailyRate: rate };
   });
+}
+
+function getFixedRooms() {
+  return FIXED_ROOM_NUMBERS.map((n) => ({
+    id: `room-${n}`,
+    number: n,
+    floor: floorForRoomNumber(n),
+    status: "vacant",
+  }));
 }
 
 function futureBookingsForRoom(bookings, roomId, date = TODAY) {
@@ -358,7 +364,7 @@ const EXP_COLORS = ["#fbbf24", "#38bdf8", "#34d399", "#f472b6", "#a78bfa"];
 
 // ---------- main ----------
 export default function BuildingManager() {
-  const [rooms, setRooms] = useState(() => getFixedRooms([]));
+  const [rooms, setRooms] = useState(() => getFixedRooms());
   const [bookings, setBookings] = useState([]);
   const [payments, setPayments] = useState([]);
   const [expenses, setExpenses] = useState([]);
@@ -388,11 +394,12 @@ export default function BuildingManager() {
       if (error) console.error("خطأ في تحميل البيانات:", error);
       if (data?.data) {
         const d = data.data;
-        setRooms(getFixedRooms(d.rooms || []));
+        setRooms(getFixedRooms());
+        const savedRooms = d.rooms || [];
         if (d.bookings) {
-          setBookings(d.bookings);
+          setBookings(migrateBookingRates(d.bookings, savedRooms));
         } else if (d.residents) {
-          setBookings(d.residents.map((r) => ({
+          setBookings(migrateBookingRates(d.residents.map((r) => ({
             id: r.id,
             name: r.name,
             phone: r.phone || "",
@@ -400,7 +407,7 @@ export default function BuildingManager() {
             checkIn: r.checkIn || r.moveIn || TODAY,
             checkOut: r.checkOut || addDays(r.checkIn || r.moveIn || TODAY, 30),
             collectionMode: r.collectionMode || "lumpsum",
-          })));
+          })), savedRooms));
         }
         if (d.payments) {
           setPayments(d.payments.map((p) => ({
@@ -411,7 +418,7 @@ export default function BuildingManager() {
         }
         if (d.expenses) setExpenses(d.expenses);
       } else {
-        setRooms(getFixedRooms([]));
+        setRooms(getFixedRooms());
       }
       setLoaded(true);
     }
@@ -425,7 +432,7 @@ export default function BuildingManager() {
     const timeout = setTimeout(() => {
       supabase
         .from("building_data")
-        .update({ data: { rooms: getFixedRooms(rooms), bookings, payments, expenses } })
+        .update({ data: { rooms: getFixedRooms(), bookings, payments, expenses } })
         .eq("id", 1)
         .then(({ error }) => {
           if (error) {
@@ -1050,7 +1057,9 @@ function RoomCard({ room, status, booking, allBookings, onBook, onView }) {
       {allBookings.length > 1 && (
         <div className="text-[10px] text-amber-400/80 mb-1">+{allBookings.length - 1} حجز آخر</div>
       )}
-      <div className="text-xs font-mono text-amber-400/90">{fmtRate(room)}</div>
+      {booking && (
+        <div className="text-xs font-mono text-amber-400/90">{fmtDailyRate(bookingDailyRate(booking, room))}</div>
+      )}
       <div className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           type="button"
@@ -1073,7 +1082,7 @@ function RoomDetailPanel({ room, bookings, onBook }) {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-sm text-slate-400">طابق {room.floor} · {fmtRate(room)}</div>
+          <div className="text-sm text-slate-400">طابق {room.floor}</div>
           <StatusChip status={status} />
         </div>
         <BtnPrimary onClick={onBook}><Plus size={15} /> حجز في فترة فارغة</BtnPrimary>
@@ -1095,7 +1104,9 @@ function RoomDetailPanel({ room, bookings, onBook }) {
               <div key={b.id} className="flex items-center justify-between bg-slate-800/50 rounded-xl px-3 py-2 text-sm">
                 <div>
                   <div className="font-medium">{b.name}</div>
-                  <div className="text-xs text-slate-500">{fmtDateShort(b.checkIn)} — {fmtDateShort(b.checkOut)} · {bookingNights(b.checkIn, b.checkOut)} ليلة</div>
+                  <div className="text-xs text-slate-500">
+                    {fmtDateShort(b.checkIn)} — {fmtDateShort(b.checkOut)} · {bookingNights(b.checkIn, b.checkOut)} ليلة · {fmtDailyRate(bookingDailyRate(b, room))}
+                  </div>
                 </div>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${bookingPhase(b) === "active" ? "bg-emerald-400/15 text-emerald-400" : "bg-amber-400/15 text-amber-400"}`}>
                   {bookingPhase(b) === "active" ? "جاري" : "قادم"}
@@ -1177,11 +1188,15 @@ function BookingCard({ booking, room, paid, payStatus, roomStatus, onDelete, onP
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3 text-sm">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-3 text-sm">
         <div className="bg-slate-800/50 rounded-xl px-3 py-2">
           <div className="text-[10px] text-slate-500 mb-0.5">المدة</div>
           <div className="text-xs text-slate-300">{fmtDateShort(booking.checkIn)} — {fmtDateShort(booking.checkOut)}</div>
           <div className="text-[10px] text-slate-500">{bookingNights(booking.checkIn, booking.checkOut)} ليلة</div>
+        </div>
+        <div className="bg-slate-800/50 rounded-xl px-3 py-2">
+          <div className="text-[10px] text-slate-500 mb-0.5">سعر الليلة</div>
+          <div className="font-mono text-slate-300">{fmtDailyRate(bookingDailyRate(booking, room))}</div>
         </div>
         <div className="bg-slate-800/50 rounded-xl px-3 py-2">
           <div className="text-[10px] text-slate-500 mb-0.5">الإجمالي</div>
@@ -1232,7 +1247,7 @@ function PaymentCard({ booking, room, entries, status, onAdd, onDelete }) {
           <div className={`w-2 h-2 rounded-full shrink-0 ${status === "paid" ? "bg-emerald-400" : status === "partial" ? "bg-amber-400 animate-pulse-dot" : "bg-rose-400 animate-pulse-dot"}`} />
           <div className="min-w-0">
             <div className="font-medium truncate">{booking.name}</div>
-            <div className="text-xs text-slate-500">شقة {room?.number} · {bookingNights(booking.checkIn, booking.checkOut)} ليلة</div>
+            <div className="text-xs text-slate-500">شقة {room?.number} · {bookingNights(booking.checkIn, booking.checkOut)} ليلة · {fmtDailyRate(bookingDailyRate(booking, room))}</div>
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -1314,6 +1329,7 @@ function BookingForm({ rooms, bookings, onAdd, prefillRoomId }) {
   const [checkIn, setCheckIn] = useState(TODAY);
   const [checkOut, setCheckOut] = useState(addDays(TODAY, 3));
   const [roomId, setRoomId] = useState(prefillRoomId || rooms[0]?.id || "");
+  const [dailyRate, setDailyRate] = useState(String(DEFAULT_DAILY_RATE));
   const [collectionMode, setCollectionMode] = useState("lumpsum");
   const [error, setError] = useState("");
 
@@ -1322,7 +1338,8 @@ function BookingForm({ rooms, bookings, onAdd, prefillRoomId }) {
   const roomBookings = bookingsForRoom(bookings, roomId).sort((a, b) => a.checkIn.localeCompare(b.checkIn));
   const periodAvailable = roomId ? isRoomAvailable(bookings, roomId, checkIn, checkOut) : false;
   const nights = bookingNights(checkIn, checkOut);
-  const total = expectedForBooking({ checkIn, checkOut }, selectedRoom);
+  const rate = Number(dailyRate) || 0;
+  const total = rate * nights;
 
   useEffect(() => {
     if (prefillRoomId) setRoomId(prefillRoomId);
@@ -1335,12 +1352,16 @@ function BookingForm({ rooms, bookings, onAdd, prefillRoomId }) {
       setError("تأكد من الاسم والتواريخ (يوم الخروج بعد يوم الدخول)");
       return;
     }
+    if (!rate || rate <= 0) {
+      setError("أدخل سعر الليلة بشكل صحيح");
+      return;
+    }
     if (!isRoomAvailable(bookings, roomId, checkIn, checkOut)) {
       setError("الشقة محجوزة في هذه الفترة — اختر تواريخ أخرى أو شقة مختلفة");
       return;
     }
     setError("");
-    onAdd({ name, phone, roomId, checkIn, checkOut, collectionMode });
+    onAdd({ name, phone, roomId, checkIn, checkOut, dailyRate: rate, collectionMode });
   };
 
   return (
@@ -1360,6 +1381,18 @@ function BookingForm({ rooms, bookings, onAdd, prefillRoomId }) {
             ))}
           </div>
         </div>
+        <div>
+          <FieldLabel icon={Banknote}>سعر الليلة (ر.ع)</FieldLabel>
+          <input
+            type="number"
+            min="1"
+            className={inputCls}
+            placeholder="0"
+            value={dailyRate}
+            onChange={(e) => setDailyRate(e.target.value)}
+          />
+          <p className="text-[11px] text-slate-500 mt-1.5">يُحدد لكل حجز — يمكنك تغييره حسب العميل أو الفترة</p>
+        </div>
         <div className="sm:col-span-2">
           <FieldLabel icon={Home}>اختر الشقة</FieldLabel>
           <select className={inputCls} value={roomId} onChange={(e) => setRoomId(e.target.value)}>
@@ -1368,7 +1401,7 @@ function BookingForm({ rooms, bookings, onAdd, prefillRoomId }) {
               const { status } = roomStatusOn(bookings, r.id);
               return (
                 <option key={r.id} value={r.id} disabled={!avail}>
-                  شقة {r.number} — {floorLabel(r.floor)} — {ROOM_STATUS_LABEL[status]} — {avail ? "متاحة للفترة" : "محجوزة في الفترة"} — {fmtRate(r)}
+                  شقة {r.number} — {floorLabel(r.floor)} — {ROOM_STATUS_LABEL[status]} — {avail ? "متاحة للفترة" : "محجوزة في الفترة"}
                 </option>
               );
             })}
@@ -1402,14 +1435,14 @@ function BookingForm({ rooms, bookings, onAdd, prefillRoomId }) {
         </div>
       </div>
 
-      {selectedRoom && periodAvailable && (
+      {selectedRoom && periodAvailable && rate > 0 && (
         <div className="bg-gradient-to-l from-amber-400/10 to-transparent border border-amber-400/20 rounded-xl px-4 py-3 flex items-center justify-between">
           <div>
             <div className="text-xs text-slate-400">المبلغ الإجمالي</div>
             <div className="text-xl font-mono font-bold text-amber-400">{fmt(total)}</div>
           </div>
           <div className="text-left text-xs text-slate-500">
-            {nights} ليلة × {fmt(dailyRate(selectedRoom))}
+            {nights} ليلة × {fmt(rate)}
           </div>
         </div>
       )}
