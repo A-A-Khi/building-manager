@@ -433,24 +433,24 @@ export default function BuildingManager() {
 
   const stats = useMemo(() => {
     const expected = bookingsInMonth.reduce((s, b) => s + expectedForBooking(b, roomOf(b.id)), 0);
-    const monthStart = `${month}-01`;
-    const [y, m] = month.split("-").map(Number);
-    const monthEnd = m + 1 > 12 ? `${y + 1}-01-01` : monthKey(y, m + 1) + "-01";
-    const monthPayments = payments.filter((p) => {
-      const d = p.date || "";
-      return d >= monthStart && d < monthEnd;
-    });
-    const collected = monthPayments.reduce((s, p) => s + p.amount, 0);
+    const collected = bookingsInMonth.reduce((s, b) => s + totalPaidForBooking(b.id), 0);
     const outstanding = bookingsInMonth.reduce((s, b) => {
       const exp = expectedForBooking(b, roomOf(b.id));
       const paid = totalPaidForBooking(b.id);
       return s + Math.max(exp - paid, 0);
     }, 0);
+    const monthStart = `${month}-01`;
+    const [y, m] = month.split("-").map(Number);
+    const monthEnd = m + 1 > 12 ? `${y + 1}-01-01` : monthKey(y, m + 1) + "-01";
+    const cashCollected = payments.filter((p) => {
+      const d = p.date || "";
+      return d >= monthStart && d < monthEnd;
+    }).reduce((s, p) => s + p.amount, 0);
     const monthExpenses = expenses.filter((e) => e.month === month);
     const totalExpenses = monthExpenses.reduce((s, e) => s + e.amount, 0);
     const netIncome = collected - totalExpenses;
     const occupancyRate = rooms.length ? (occupied.length / rooms.length) * 100 : 0;
-    return { expected, collected, outstanding, totalExpenses, netIncome, occupancyRate, monthExpenses };
+    return { expected, collected, cashCollected, outstanding, totalExpenses, netIncome, occupancyRate, monthExpenses };
   }, [rooms, occupied, bookings, bookingsInMonth, payments, expenses, month]);
 
   const trendData = MONTHS.map(({ key, label }) => {
@@ -459,12 +459,13 @@ export default function BuildingManager() {
     const monthEnd = m + 1 > 12 ? `${y + 1}-01-01` : monthKey(y, m + 1) + "-01";
     const monthBookings = bookings.filter((b) => datesOverlap(b.checkIn, b.checkOut, monthStart, monthEnd));
     const expected = monthBookings.reduce((s, b) => s + expectedForBooking(b, roomOf(b.id)), 0);
-    const collected = payments.filter((p) => {
+    const collected = monthBookings.reduce((s, b) => s + totalPaidForBooking(b.id), 0);
+    const cashCollected = payments.filter((p) => {
       const d = p.date || "";
       return d >= monthStart && d < monthEnd;
     }).reduce((s, p) => s + p.amount, 0);
     const exp = expenses.filter((e) => e.month === key).reduce((s, e) => s + e.amount, 0);
-    return { label, "المحصّل": collected, "المتوقع": expected, "المصروفات": exp };
+    return { label, "المحصّل": collected, "تحصيل نقدي": cashCollected, "المتوقع": expected, "المصروفات": exp };
   });
 
   const occupancyPie = [
@@ -692,7 +693,7 @@ export default function BuildingManager() {
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
               <StatCard icon={Home} label="نسبة الإشغال" value={`${stats.occupancyRate.toFixed(0)}%`} sub={`${occupied.length} مشغولة · ${reserved.length} محجوزة · ${vacant.length} شاغرة`} tone="emerald" accent="emerald" />
               <StatCard icon={Wallet} label="الإيراد المتوقع" value={fmt(stats.expected)} sub={`حجوزات ${MONTHS.find(m => m.key === month)?.label}`} />
-              <StatCard icon={TrendingUp} label="المحصّل" value={fmt(stats.collected)} tone="emerald" accent="emerald" />
+              <StatCard icon={TrendingUp} label="المحصّل" value={fmt(stats.collected)} sub={`مدفوع لحجوزات ${MONTHS.find(m => m.key === month)?.label}${stats.cashCollected !== stats.collected ? ` · نقدي بالشهر ${fmt(stats.cashCollected)}` : ""}`} tone="emerald" accent="emerald" />
               <StatCard icon={TrendingDown} label="المتبقي" value={fmt(stats.outstanding)} tone="rose" accent="rose" />
               <StatCard icon={Zap} label="المصروفات" value={fmt(stats.totalExpenses)} tone="amber" accent="amber" />
               <StatCard icon={Wallet} label="صافي الدخل" value={fmt(stats.netIncome)} tone={stats.netIncome >= 0 ? "emerald" : "rose"} accent={stats.netIncome >= 0 ? "emerald" : "rose"} />
@@ -710,6 +711,7 @@ export default function BuildingManager() {
                     <Legend />
                     <Bar dataKey="المتوقع" fill="#334155" radius={[4, 4, 0, 0]} />
                     <Bar dataKey="المحصّل" fill="#fbbf24" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="تحصيل نقدي" fill="#38bdf8" radius={[4, 4, 0, 0]} />
                     <Bar dataKey="المصروفات" fill="#f472b6" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
