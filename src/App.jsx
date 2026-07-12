@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { supabase } from "./supabaseClient";
+import { supabase, supabaseConfigured } from "./supabaseClient";
 import {
   Building2, Wallet, TrendingUp, TrendingDown, Home, LayoutDashboard,
   DoorOpen, CalendarDays, CreditCard, Receipt, Zap, CheckCircle2, XCircle,
@@ -340,6 +340,11 @@ export default function BuildingManager() {
   // load saved data once on first render
   useEffect(() => {
     async function load() {
+      if (!supabaseConfigured || !supabase) {
+        console.error("Supabase غير مضبوط: أضف VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY");
+        setLoaded(true);
+        return;
+      }
       const { data, error } = await supabase.from("building_data").select("data").eq("id", 1).single();
       if (error) console.error("خطأ في تحميل البيانات:", error);
       if (data?.data) {
@@ -374,7 +379,7 @@ export default function BuildingManager() {
 
   // save automatically whenever data changes (after initial load)
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || !supabaseConfigured || !supabase) return;
     setSaveStatus("saving");
     const timeout = setTimeout(() => {
       supabase
@@ -568,6 +573,27 @@ export default function BuildingManager() {
           <Building2 size={22} className="text-amber-400 animate-pulse" />
         </div>
         <p className="text-sm text-slate-400">جاري تحميل البيانات...</p>
+      </div>
+    );
+  }
+
+  if (!supabaseConfigured) {
+    return (
+      <div dir="rtl" className="min-h-screen bg-[#0a0f1a] text-slate-100 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-slate-900 border border-amber-500/30 rounded-2xl p-6 text-center">
+          <AlertCircle size={32} className="text-amber-400 mx-auto mb-3" />
+          <h1 className="text-lg font-semibold mb-2">التطبيق غير مربوط بقاعدة البيانات</h1>
+          <p className="text-sm text-slate-400 leading-relaxed mb-4">
+            على Vercel، أضف متغيرات البيئة ثم أعد النشر (Redeploy):
+          </p>
+          <div className="text-right text-xs font-mono bg-slate-800 rounded-xl p-3 space-y-1 text-slate-300">
+            <div>VITE_SUPABASE_URL</div>
+            <div>VITE_SUPABASE_ANON_KEY</div>
+          </div>
+          <p className="text-xs text-slate-500 mt-4">
+            Project Settings → Environment Variables → Redeploy
+          </p>
+        </div>
       </div>
     );
   }
