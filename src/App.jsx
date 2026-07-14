@@ -12,7 +12,24 @@ import {
 } from "recharts";
 
 // ---------- helpers ----------
-const fmt = (n) => `${Math.round(n).toLocaleString()} ر.ع`;
+const MONEY_DECIMALS = 3; // ريال عماني: 1000 بيسة = 1 ر.ع
+function roundMoney(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return 0;
+  return Math.round(v * 10 ** MONEY_DECIMALS) / 10 ** MONEY_DECIMALS;
+}
+function parseMoney(value) {
+  if (value == null || value === "") return NaN;
+  const normalized = String(value).trim().replace(",", ".");
+  return roundMoney(normalized);
+}
+const fmt = (n) => {
+  const v = roundMoney(n);
+  return `${v.toLocaleString("en-OM", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: MONEY_DECIMALS,
+  })} ر.ع`;
+};
 
 const monthKey = (y, m) => `${y}-${String(m).padStart(2, "0")}`;
 const CURRENT = { y: 2026, m: 7 };
@@ -44,7 +61,7 @@ function bookingDailyRate(booking, room) {
 }
 function expectedForBooking(booking, room) {
   if (!booking?.checkIn || !booking?.checkOut) return 0;
-  return bookingDailyRate(booking, room) * bookingNights(booking.checkIn, booking.checkOut);
+  return roundMoney(bookingDailyRate(booking, room) * bookingNights(booking.checkIn, booking.checkOut));
 }
 function fmtDailyRate(rate) {
   return `${fmt(rate)} / ليلة`;
@@ -465,14 +482,14 @@ export default function BuildingManager() {
 
   const roomOf = (bookingId) => rooms.find((r) => r.id === bookings.find((x) => x.id === bookingId)?.roomId);
   const paymentsFor = (bookingId) => payments.filter((p) => p.bookingId === bookingId);
-  const totalPaidForBooking = (bookingId) => paymentsFor(bookingId).reduce((s, p) => s + p.amount, 0);
+  const totalPaidForBooking = (bookingId) => roundMoney(paymentsFor(bookingId).reduce((s, p) => s + p.amount, 0));
   const statusForBooking = (bookingId) => {
     const booking = bookings.find((b) => b.id === bookingId);
     const room = roomOf(bookingId);
     const expected = expectedForBooking(booking, room);
     const paid = totalPaidForBooking(bookingId);
     if (paid <= 0) return "unpaid";
-    if (paid >= expected) return "paid";
+    if (paid + 0.0005 >= expected) return "paid"; // هامش صغير لكسور الفاصلة العشرية
     return "partial";
   };
   const activeBookings = useMemo(
@@ -491,12 +508,19 @@ export default function BuildingManager() {
     const outstanding = bookings.reduce((s, b) => {
       const exp = expectedForBooking(b, roomOf(b.id));
       const paid = totalPaidForBooking(b.id);
-      return s + Math.max(exp - paid, 0);
+      return s + Math.max(roundMoney(exp - paid), 0);
     }, 0);
     const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0);
-    const netIncome = collected - totalExpenses;
+    const netIncome = roundMoney(collected - totalExpenses);
     const occupancyRate = rooms.length ? (occupied.length / rooms.length) * 100 : 0;
-    return { expected, collected, outstanding, totalExpenses, netIncome, occupancyRate };
+    return {
+      expected: roundMoney(expected),
+      collected: roundMoney(collected),
+      outstanding: roundMoney(outstanding),
+      totalExpenses: roundMoney(totalExpenses),
+      netIncome,
+      occupancyRate,
+    };
   }, [rooms, occupied, bookings, payments, expenses]);
 
   const trendData = MONTHS.map(({ key, label }) => {
@@ -594,10 +618,11 @@ export default function BuildingManager() {
   }
 
   function addPayment(bookingId, amount, date) {
-    if (!amount || Number(amount) <= 0) return;
+    const parsed = parseMoney(amount);
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
     setPayments((prev) => [
       ...prev,
-      { id: `pay-${bookingId}-${Date.now()}`, bookingId, amount: Number(amount), date: date || TODAY },
+      { id: `pay-${bookingId}-${Date.now()}`, bookingId, amount: parsed, date: date || TODAY },
     ]);
   }
   function deletePayment(id) {
@@ -1193,9 +1218,10 @@ function RoomSchedule({ bookings, checkIn, checkOut }) {
 }
 
 function BookingCard({ booking, room, paid, payStatus, roomStatus, onDelete, onPay }) {
-  const expected = expectedForBooking(booking, room);
-  const remaining = Math.max(expected - paid, 0);
-  const pct = expected ? Math.min((paid / expected) * 100, 100) : 0;
+  const expected = roundMoney(expectedForBooking(booking, room));
+  const paidAmount = roundMoney(paid);
+  const remaining = roundMoney(Math.max(expected - paidAmount, 0));
+  const pct = expected ? Math.min((paidAmount / expected) * 100, 100) : 0;
   const phase = bookingPhase(booking);
   const phaseLabel = { active: "جاري", upcoming: "قادم", past: "منتهي" };
   const phaseStyle = { active: "bg-emerald-400/15 text-emerald-400", upcoming: "bg-sky-400/15 text-sky-400", past: "bg-slate-700 text-slate-400" };
@@ -1237,7 +1263,7 @@ function BookingCard({ booking, room, paid, payStatus, roomStatus, onDelete, onP
         </div>
         <div className="bg-slate-800/50 rounded-xl px-3 py-2">
           <div className="text-[10px] text-slate-500 mb-0.5">المدفوع</div>
-          <div className="font-mono text-emerald-400">{fmt(paid)}</div>
+          <div className="font-mono text-emerald-400">{fmt(paidAmount)}</div>
         </div>
         <div className="bg-slate-800/50 rounded-xl px-3 py-2">
           <div className="text-[10px] text-slate-500 mb-0.5">الحالة</div>
@@ -1265,9 +1291,9 @@ function PaymentCard({ booking, room, entries, status, onAdd, onDelete }) {
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(TODAY);
   const [expanded, setExpanded] = useState(status !== "paid");
-  const expected = expectedForBooking(booking, room);
-  const paid = entries.reduce((s, p) => s + p.amount, 0);
-  const remaining = Math.max(expected - paid, 0);
+  const expected = roundMoney(expectedForBooking(booking, room));
+  const paid = roundMoney(entries.reduce((s, p) => s + p.amount, 0));
+  const remaining = roundMoney(Math.max(expected - paid, 0));
   const pct = expected ? Math.min((paid / expected) * 100, 100) : 0;
 
   return (
@@ -1316,7 +1342,7 @@ function PaymentCard({ booking, room, entries, status, onAdd, onDelete }) {
               <button type="button" onClick={() => { setAmount(String(remaining)); setDate(TODAY); }} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-400/10 text-emerald-400 hover:bg-emerald-400/20 font-medium transition-colors">
                 دفع المتبقي كاملاً ({fmt(remaining)})
               </button>
-              <button type="button" onClick={() => { setAmount(String(Math.round(remaining / 2))); setDate(TODAY); }} className="text-xs px-3 py-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-slate-200 font-medium transition-colors">
+              <button type="button" onClick={() => { setAmount(String(roundMoney(remaining / 2))); setDate(TODAY); }} className="text-xs px-3 py-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-slate-200 font-medium transition-colors">
                 نصف المبلغ
               </button>
             </div>
@@ -1328,7 +1354,16 @@ function PaymentCard({ booking, room, entries, status, onAdd, onDelete }) {
           >
             <div className="flex-1 min-w-[120px]">
               <FieldLabel icon={Banknote}>مبلغ الدفعة</FieldLabel>
-              <input className={`${inputCls} w-full`} placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value)} />
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.001"
+                min="0"
+                className={`${inputCls} w-full`}
+                placeholder="0.000"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+              />
             </div>
             <div className="flex-1 min-w-[140px]">
               <FieldLabel icon={Calendar}>تاريخ الدفع</FieldLabel>
@@ -1371,8 +1406,8 @@ function BookingForm({ rooms, bookings, onAdd, prefillRoomId }) {
   const roomBookings = bookingsForRoom(bookings, roomId).sort((a, b) => a.checkIn.localeCompare(b.checkIn));
   const periodAvailable = roomId ? isRoomAvailable(bookings, roomId, checkIn, checkOut) : false;
   const nights = bookingNights(checkIn, checkOut);
-  const rate = Number(dailyRate) || 0;
-  const total = rate * nights;
+  const rate = parseMoney(dailyRate);
+  const total = Number.isFinite(rate) ? roundMoney(rate * nights) : 0;
 
   useEffect(() => {
     if (prefillRoomId) setRoomId(prefillRoomId);
@@ -1385,7 +1420,7 @@ function BookingForm({ rooms, bookings, onAdd, prefillRoomId }) {
       setError("تأكد من الاسم والتواريخ (يوم الخروج بعد يوم الدخول)");
       return;
     }
-    if (!rate || rate <= 0) {
+    if (!Number.isFinite(rate) || rate <= 0) {
       setError("أدخل سعر الليلة بشكل صحيح");
       return;
     }
@@ -1418,13 +1453,15 @@ function BookingForm({ rooms, bookings, onAdd, prefillRoomId }) {
           <FieldLabel icon={Banknote}>سعر الليلة (ر.ع)</FieldLabel>
           <input
             type="number"
-            min="1"
+            inputMode="decimal"
+            step="0.001"
+            min="0"
             className={inputCls}
-            placeholder="0"
+            placeholder="25.5"
             value={dailyRate}
             onChange={(e) => setDailyRate(e.target.value)}
           />
-          <p className="text-[11px] text-slate-500 mt-1.5">يُحدد لكل حجز — يمكنك تغييره حسب العميل أو الفترة</p>
+          <p className="text-[11px] text-slate-500 mt-1.5">يمكن إدخال كسور حتى 3 خانات (مثال: 25.4 أو 1.200 = ريال و 200 بيسة)</p>
         </div>
         <div className="sm:col-span-2">
           <FieldLabel icon={Home}>اختر الشقة</FieldLabel>
@@ -1468,7 +1505,7 @@ function BookingForm({ rooms, bookings, onAdd, prefillRoomId }) {
         </div>
       </div>
 
-      {selectedRoom && periodAvailable && rate > 0 && (
+      {selectedRoom && periodAvailable && Number.isFinite(rate) && rate > 0 && (
         <div className="bg-gradient-to-l from-amber-400/10 to-transparent border border-amber-400/20 rounded-xl px-4 py-3 flex items-center justify-between">
           <div>
             <div className="text-xs text-slate-400">المبلغ الإجمالي</div>
@@ -1493,14 +1530,30 @@ function ExpenseForm({ onAdd }) {
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   return (
-    <FormShell onSubmit={() => { if (!amount) return; onAdd({ category, description, amount: Number(amount) }); }} submitLabel="إضافة المصروف">
+    <FormShell onSubmit={() => {
+      const parsed = parseMoney(amount);
+      if (!Number.isFinite(parsed) || parsed <= 0) return;
+      onAdd({ category, description, amount: parsed });
+    }} submitLabel="إضافة المصروف">
       <div className="grid sm:grid-cols-2 gap-4">
         <div><FieldLabel>الفئة</FieldLabel>
           <select className={inputCls} value={category} onChange={(e) => setCategory(e.target.value)}>
             {CATEGORIES_ALL.map((c) => <option key={c}>{c}</option>)}
           </select>
         </div>
-        <div><FieldLabel icon={Banknote}>المبلغ (ر.ع)</FieldLabel><input className={inputCls} placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
+        <div>
+          <FieldLabel icon={Banknote}>المبلغ (ر.ع)</FieldLabel>
+          <input
+            type="number"
+            inputMode="decimal"
+            step="0.001"
+            min="0"
+            className={inputCls}
+            placeholder="0.000"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+          />
+        </div>
         <div className="sm:col-span-2"><FieldLabel>الوصف</FieldLabel><input className={inputCls} placeholder="اختياري" value={description} onChange={(e) => setDescription(e.target.value)} /></div>
       </div>
     </FormShell>
