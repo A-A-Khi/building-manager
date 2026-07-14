@@ -93,6 +93,13 @@ const BOOKING_FILTERS = [
   { id: "upcoming", label: "قادمة" },
   { id: "past", label: "منتهية" },
 ];
+const PAYMENT_FILTERS = [
+  { id: "all", label: "الكل" },
+  { id: "unpaid", label: "غير مدفوع" },
+  { id: "partial", label: "جزئي" },
+  { id: "paid", label: "مدفوع" },
+  { id: "due", label: "مستحق" },
+];
 function fmtDateShort(d) {
   const [, m, day] = d.split("-");
   return `${Number(day)} ${ARABIC_MONTHS[Number(m) - 1]}`;
@@ -378,6 +385,7 @@ export default function BuildingManager() {
   const [paymentFilter, setPaymentFilter] = useState("all");
   const [roomFilter, setRoomFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [paymentSearch, setPaymentSearch] = useState("");
   const [confirm, setConfirm] = useState(null);
   const [selectedRoomDetail, setSelectedRoomDetail] = useState(null);
   const [prefillRoomId, setPrefillRoomId] = useState(null);
@@ -539,10 +547,23 @@ export default function BuildingManager() {
       if (unpaidA !== unpaidB) return unpaidA - unpaidB;
       return b.checkIn.localeCompare(a.checkIn);
     });
-    if (paymentFilter === "unpaid") list = list.filter((b) => statusForBooking(b.id) !== "paid");
+    if (paymentFilter === "unpaid") list = list.filter((b) => statusForBooking(b.id) === "unpaid");
     if (paymentFilter === "partial") list = list.filter((b) => statusForBooking(b.id) === "partial");
+    if (paymentFilter === "paid") list = list.filter((b) => statusForBooking(b.id) === "paid");
+    if (paymentFilter === "due") list = list.filter((b) => statusForBooking(b.id) !== "paid");
+    if (paymentSearch.trim()) {
+      const q = paymentSearch.trim().toLowerCase();
+      list = list.filter((b) => {
+        const room = roomOf(b.id);
+        return (
+          b.name.toLowerCase().includes(q) ||
+          b.phone?.includes(q) ||
+          String(room?.number ?? "").includes(q)
+        );
+      });
+    }
     return list;
-  }, [bookings, paymentFilter, payments]);
+  }, [bookings, paymentFilter, paymentSearch, payments, rooms]);
 
   const bookingFilterCounts = useMemo(() => ({
     all: bookings.length,
@@ -550,6 +571,17 @@ export default function BuildingManager() {
     upcoming: bookings.filter((b) => bookingPhase(b) === "upcoming").length,
     past: bookings.filter((b) => bookingPhase(b) === "past").length,
   }), [bookings]);
+
+  const paymentFilterCounts = useMemo(() => {
+    const statuses = bookings.map((b) => statusForBooking(b.id));
+    return {
+      all: bookings.length,
+      unpaid: statuses.filter((s) => s === "unpaid").length,
+      partial: statuses.filter((s) => s === "partial").length,
+      paid: statuses.filter((s) => s === "paid").length,
+      due: statuses.filter((s) => s !== "paid").length,
+    };
+  }, [bookings, payments]);
 
   function requestDelete(type, item, label) {
     setConfirm({ type, item, label });
@@ -860,28 +892,39 @@ export default function BuildingManager() {
               title="المدفوعات"
               subtitle={unpaidCount > 0 ? `${unpaidCount} حجز بانتظار الدفع` : "جميع الحجوزات مدفوعة"}
             />
-            <FilterChips
-              options={[
-                { id: "all", label: "الكل", count: bookings.length },
-                { id: "unpaid", label: "غير مدفوع", count: bookings.filter((b) => statusForBooking(b.id) === "unpaid").length },
-                { id: "partial", label: "جزئي", count: bookings.filter((b) => statusForBooking(b.id) === "partial").length },
-              ]}
-              value={paymentFilter}
-              onChange={setPaymentFilter}
-            />
-            <div className="flex flex-col gap-3">
-              {filteredPayments.map((book) => (
-                <PaymentCard
-                  key={book.id}
-                  booking={book}
-                  room={roomOf(book.id)}
-                  entries={paymentsFor(book.id)}
-                  status={statusForBooking(book.id)}
-                  onAdd={(amount, date) => addPayment(book.id, amount, date)}
-                  onDelete={deletePayment}
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
+                <Search size={15} className="absolute right-3 top-2.5 text-slate-500 pointer-events-none" />
+                <input
+                  className={`${inputCls} w-full pr-9`}
+                  placeholder="بحث بالاسم أو الهاتف أو رقم الشقة..."
+                  value={paymentSearch}
+                  onChange={(e) => setPaymentSearch(e.target.value)}
                 />
-              ))}
+              </div>
+              <FilterChips
+                options={PAYMENT_FILTERS.map((f) => ({ ...f, count: paymentFilterCounts[f.id] }))}
+                value={paymentFilter}
+                onChange={setPaymentFilter}
+              />
             </div>
+            {filteredPayments.length > 0 ? (
+              <div className="flex flex-col gap-3">
+                {filteredPayments.map((book) => (
+                  <PaymentCard
+                    key={book.id}
+                    booking={book}
+                    room={roomOf(book.id)}
+                    entries={paymentsFor(book.id)}
+                    status={statusForBooking(book.id)}
+                    onAdd={(amount, date) => addPayment(book.id, amount, date)}
+                    onDelete={deletePayment}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="text-center text-sm text-slate-500 py-8">لا توجد نتائج مطابقة للبحث أو الفلتر</p>
+            )}
           </div>
         )}
 
